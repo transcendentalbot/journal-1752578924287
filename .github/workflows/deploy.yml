@@ -1,0 +1,68 @@
+name: Deploy to Vercel and AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    outputs:
+      deployment-url: ${{ steps.vercel.outputs.preview-url }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - run: npm install
+      
+      - run: npm run build
+      
+      - name: Deploy to Vercel
+        id: vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+
+  setup-database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Create DynamoDB table if not exists
+        run: |
+          TABLE_NAME="${{ secrets.DATABASE_TABLE_NAME }}"
+          
+          # Check if table exists
+          if aws dynamodb describe-table --table-name "$TABLE_NAME" 2>/dev/null; then
+            echo "Table $TABLE_NAME already exists"
+          else
+            echo "Creating table $TABLE_NAME"
+            aws dynamodb create-table \
+              --table-name "$TABLE_NAME" \
+              --attribute-definitions \
+                AttributeName=PK,AttributeType=S \
+                AttributeName=SK,AttributeType=S \
+                AttributeName=GSI1PK,AttributeType=S \
+                AttributeName=GSI1SK,AttributeType=S \
+              --key-schema \
+                AttributeName=PK,KeyType=HASH \
+                AttributeName=SK,KeyType=RANGE \
+              --global-secondary-indexes \
+                "IndexName=GSI1,Keys=[{AttributeName=GSI1PK,KeyType=HASH},{AttributeName=GSI1SK,KeyType=RANGE}],Projection={ProjectionType=ALL},BillingMode=PAY_PER_REQUEST" \
+              --billing-mode PAY_PER_REQUEST \
+              --tags Key=Project,Value=DataflowGenerated Key=ManagedBy,Value=DataflowPlatform
+          fi
